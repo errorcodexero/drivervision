@@ -162,7 +162,7 @@ Target::TargetLocation Target::GetTargetLocation( TargetID which )
 //	IMAGE_PLANE 718.73177	// 48 degrees
 //	IMAGE_PLANE 735.94962	// 47 degrees
 
-#define	IMAGE_PLANE 693.	// M206 measured (49.6 degrees)
+#define IMAGE_PLANE 775.	// M1011 measured, 44.9 degrees
 
 // FRC target dimensions:
 //
@@ -311,29 +311,37 @@ static void OverlayLimits( RGBImage *image, double leftX, double centerX, double
     if (leftX >= 0) {
 	points[0].x = points[1].x = (int)(leftX + 0.5);
 	points[0].y = 0;
-	points[1].y = (HEIGHT - 1);
-	imaqOverlayLine(image->GetImaqImage(), points[0], points[1], &IMAQ_RGB_BLUE, NULL);
-    }
-
-    if (centerX >= 0) {
-	points[0].x = points[1].x = (int)(centerX + 0.5);
-	points[0].y = 0;
-	points[1].y = (HEIGHT - 1);
+	points[1].y = HEIGHT - 1;
 	imaqOverlayLine(image->GetImaqImage(), points[0], points[1], &IMAQ_RGB_BLUE, NULL);
     }
 
     if (rightX >= 0) {
 	points[0].x = points[1].x = (int)(rightX + 0.5);
 	points[0].y = 0;
-	points[1].y = (HEIGHT - 1);
+	points[1].y = HEIGHT - 1;
 	imaqOverlayLine(image->GetImaqImage(), points[0], points[1], &IMAQ_RGB_BLUE, NULL);
     }
+
+    {
+	points[0].x = WIDTH / 2 - 2;
+	points[0].y = 0;
+	points[1].x = points[0].x;
+	points[1].y = HEIGHT - 1;
+	imaqOverlayLine(image->GetImaqImage(), points[0], points[1], &IMAQ_RGB_RED, NULL);
+
+	points[0].x = WIDTH / 2 + 2;
+	points[0].y = 0;
+	points[1].x = points[0].x;
+	points[1].y = HEIGHT - 1;
+	imaqOverlayLine(image->GetImaqImage(), points[0], points[1], &IMAQ_RGB_RED, NULL);
+    }
+
 }
 
 void Target::SaveImages()
 {
     // long then = (long) GetFPGATime();
-
+#if 0
     if (!imaqWriteFile(m_cameraImage.GetImaqImage(), "00-camera.bmp", NULL)) {
 	printf("%s: imaqWriteFile(\"00-camera.bmp\") FAILED\n", __FUNCTION__);
 	// ignore the error
@@ -354,7 +362,7 @@ void Target::SaveImages()
 	printf("%s: imaqWriteFile(\"04-filtered.bmp\") FAILED\n", __FUNCTION__);
 	// ignore the error
     }
-
+#endif
     imaqMergeOverlay(m_overlay.GetImaqImage(), m_cameraImage.GetImaqImage(), NULL, 0, NULL );
 
     OverlayParticle(&m_overlay, m_pTop);
@@ -368,10 +376,12 @@ void Target::SaveImages()
 
     imaqMergeOverlay(m_overlay.GetImaqImage(), m_overlay.GetImaqImage(), NULL, 0, NULL);
 
+#if 0
     if (!imaqWriteFile(m_overlay.GetImaqImage(), "05-overlay.bmp", FALSE)) {
 	printf("%s: imaqWriteFile(\"05-overlay.bmp\") FAILED\n", __FUNCTION__);
 	// ignore the error
     }
+#endif
 
     // long now = (long) GetFPGATime();
     // printf("%s: image save took %ld microseconds\n", __FUNCTION__, (now - then));
@@ -402,27 +412,12 @@ bool Target::FindParticles( float threshold )
     }
 
     // select interesting particles
-#if 1
     if (!imaqThreshold(m_threshold.GetImaqImage(), m_monoImage.GetImaqImage(),
     	/*rangeMin*/ threshold, /*rangeMax*/ 256., /*useNewValue*/ 1, /*newValue */ 1))
     {
 	printf("%s: imaqThreshold FAILED\n", __FUNCTION__);
 	return false;
     }
-#else
-    ThresholdData *pThD;
-    if (!(pThD = imaqAutoThreshold2(m_threshold.GetImaqImage(), m_monoImage.GetImaqImage(),
-    			2, IMAQ_THRESH_INTERCLASS, NULL)))
-    {
-	printf("%s: imaqThreshold FAILED\n", __FUNCTION__);
-	return false;
-    }
-    for (int i = 0; i < 2; i++) {
-	printf("range min %g max %g useNewValue %d newValue %g\n",
-	    pThD[i].rangeMin, pThD[i].rangeMax, pThD[i].useNewValue, pThD[i].newValue);
-    }
-    imaqDispose(pThD);
-#endif
 
     if (!imaqConvexHull(m_convexHull.GetImaqImage(), m_threshold.GetImaqImage(),
     	/*connectivity8*/ 1))

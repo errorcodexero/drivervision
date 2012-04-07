@@ -13,7 +13,7 @@
 #define CAMERA_WHITE_BALANCE "fixed_fluor2"
 
 // Camera exposure level (auto, flickerfree50, flickerfree60, hold).
-#define CAMERA_EXPOSURE "hold"
+#define CAMERA_EXPOSURE "flickerfree60"
 
 // Camera exposure priority (0 - prioritize quality, 50 - none, 100 - prioritize framerate).
 #define CAMERA_EXPOSURE_PRIORITY 0

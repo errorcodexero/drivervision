@@ -150,7 +150,7 @@ BOOL InitInstance(HINSTANCE hInstance, LPTSTR lpCmdLine, int nCmdShow)
     hInst = hInstance; // Store instance handle in our global variable
 
     hAppWnd = CreateWindow(szWindowClass, szTitle, WS_OVERLAPPEDWINDOW,
-	CW_USEDEFAULT, CW_USEDEFAULT, 960, 480, NULL, NULL, hInst, NULL);
+	CW_USEDEFAULT, CW_USEDEFAULT, 920, 540, NULL, NULL, hInst, NULL);
 
     if (!hAppWnd)
     {
@@ -158,7 +158,7 @@ BOOL InitInstance(HINSTANCE hInstance, LPTSTR lpCmdLine, int nCmdShow)
     }
 
     hTxtWnd = CreateWindow(TEXT("STATIC"), NULL, WS_CHILD | WS_VISIBLE,
-			    640, 0, 320, 480,
+			    650, 0, 260, 480,
 			    hAppWnd, NULL, hInst, NULL);
 
     TCHAR camera_ip[16] = TEXT(CAMERA_IP);
