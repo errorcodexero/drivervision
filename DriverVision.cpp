@@ -10,7 +10,27 @@
 #define MAX_LOADSTRING 100
 
 #define CAMERA_IP "10.14.25.11"
+#define	CAMERA2_IP "10.14.25.12"
 #define	THRESHOLD 240
+
+#define	IMAGE1_X	660
+#define	IMAGE1_WIDTH	640
+#define	IMAGE1_Y	0
+#define	IMAGE1_HEIGHT	480
+
+#define	IMAGE2_X	0
+#define	IMAGE2_WIDTH	640
+#define	IMAGE2_Y	0
+#define	IMAGE2_HEIGHT	480
+
+#define	TEXT_X		660
+#define	TEXT_WIDTH	640
+#define	TEXT_Y		490
+#define	TEXT_HEIGHT	60
+
+#define	WINDOW_WIDTH	1300
+#define	WINDOW_HEIGHT	610
+
 
 // Global Variables:
 HINSTANCE hInst;				// current instance
@@ -19,8 +39,10 @@ TCHAR targetStr[400];
 TCHAR szTitle[MAX_LOADSTRING];			// The title bar text
 TCHAR szWindowClass[MAX_LOADSTRING];		// the main window class name
 AxisCamera *pCamera = NULL;
+AxisCamera *pCamera2 = NULL;
 Target *pTarget = NULL;
 Image *processedImage = NULL;
+Image *secondImage = NULL;
 HANDLE appSync;
 bool targetValid = false;
 Target::TargetLocation tlTop, tlLeft, tlRight, tlBottom, tlCenter;
@@ -111,25 +133,38 @@ DWORD WINAPI RunApp(LPVOID param)
     HANDLE hMutex = OpenMutex(SYNCHRONIZE, FALSE, TEXT("DriverVision"));
     Image *cameraImage = imaqCreateImage(IMAQ_IMAGE_RGB, 3);
     for (;;) {
-	if (!pCamera->GetImage(cameraImage)) {
-	    fprintf(stderr, "axisCamera.GetImage failed\n");
-	    break;
+	bool update = false;
+	if (pCamera) {
+	    if (pCamera->GetImage(cameraImage)) {
+		WaitForSingleObject(hMutex, INFINITE);
+		if (targetValid = pTarget->ProcessImage(cameraImage, THRESHOLD)) {
+		    // printf("ProcessImage returns true\n");
+		    tlCenter = pTarget->GetTargetLocation(Target::kCenter);
+		    tlTop    = pTarget->GetTargetLocation(Target::kTop);
+		    tlBottom = pTarget->GetTargetLocation(Target::kBottom);
+		    tlLeft   = pTarget->GetTargetLocation(Target::kLeft);
+		    tlRight  = pTarget->GetTargetLocation(Target::kRight);
+		}
+		ReleaseMutex(hMutex);
+		update = true;
+	    } else {
+		fprintf(stderr, "Camera 1 GetImage failed\n");
+	    }
 	}
-
-	WaitForSingleObject(hMutex, INFINITE);
-
-	if (targetValid = pTarget->ProcessImage(cameraImage, THRESHOLD)) {
-	    // printf("ProcessImage returns true\n");
-	    tlCenter = pTarget->GetTargetLocation(Target::kCenter);
-	    tlTop    = pTarget->GetTargetLocation(Target::kTop);
-	    tlBottom = pTarget->GetTargetLocation(Target::kBottom);
-	    tlLeft   = pTarget->GetTargetLocation(Target::kLeft);
-	    tlRight  = pTarget->GetTargetLocation(Target::kRight);
+	if (pCamera2) {
+	    if (pCamera2->GetImage(cameraImage)) {
+		WaitForSingleObject(hMutex, INFINITE);
+		if (imaqDuplicate(secondImage, cameraImage) != 0) {
+		    update = true;
+		}
+		ReleaseMutex(hMutex);
+	    } else {
+		fprintf(stderr, "Camera 2 GetImage failed\n");
+	    }
 	}
-
-	ReleaseMutex(hMutex);
-
-	InvalidateRect(hWnd, NULL, false);
+	if (update) {
+	    InvalidateRect(hWnd, NULL, false);
+	}
     }
 
     return 0;
@@ -150,7 +185,8 @@ BOOL InitInstance(HINSTANCE hInstance, LPTSTR lpCmdLine, int nCmdShow)
     hInst = hInstance; // Store instance handle in our global variable
 
     hAppWnd = CreateWindow(szWindowClass, szTitle, WS_OVERLAPPEDWINDOW,
-	CW_USEDEFAULT, CW_USEDEFAULT, 920, 540, NULL, NULL, hInst, NULL);
+	CW_USEDEFAULT, CW_USEDEFAULT, WINDOW_WIDTH, WINDOW_HEIGHT,
+	NULL, NULL, hInst, NULL);
 
     if (!hAppWnd)
     {
@@ -158,14 +194,18 @@ BOOL InitInstance(HINSTANCE hInstance, LPTSTR lpCmdLine, int nCmdShow)
     }
 
     hTxtWnd = CreateWindow(TEXT("STATIC"), NULL, WS_CHILD | WS_VISIBLE,
-			    650, 0, 260, 480,
+			    TEXT_X, TEXT_Y, TEXT_WIDTH, TEXT_HEIGHT,
 			    hAppWnd, NULL, hInst, NULL);
 
-    TCHAR camera_ip[16] = TEXT(CAMERA_IP);
-    if (lpCmdLine && _tcslen(lpCmdLine) > 0 && _tcslen(lpCmdLine) < sizeof camera_ip) {
-	_tcscpy_s(camera_ip, lpCmdLine);
+    if (lpCmdLine && _tcslen(lpCmdLine) > 0) {
+//	pCamera = new AxisCamera(lpCmdLine);
+	pCamera2 = NULL;
+	secondImage = NULL;
+    } else {
+//	pCamera = new AxisCamera(TEXT(CAMERA_IP));
+	pCamera2 = new AxisCamera(TEXT(CAMERA2_IP));
+	secondImage = imaqCreateImage(IMAQ_IMAGE_RGB, 3);
     }
-    pCamera = new AxisCamera(camera_ip);
     pTarget = new Target();
     processedImage = imaqCreateImage(IMAQ_IMAGE_RGB, 3);
     appSync = CreateMutex(NULL, FALSE, TEXT("DriverVision"));
@@ -198,6 +238,35 @@ bool GetProcessedImage( Image *pImage )
     return false;
 }
 
+double Ballistics( int height, double distance )
+{
+    // these constants for distances in inches, speed in PPS
+    const double swish_low[3] = { 3.702E+02, -1.293E+00, 2.145E-02 };
+    const double backboard_low[3] = { 3.773E+02, 1.867E+00, 0.000E+00 };
+//  const double swish_mid[3] = { 1.296E+02, 4.956E+00, -8.586E-03 };
+    const double backboard_mid[3] = { 2.755E+02, 3.556E+00, -3.864E-03 };
+    const double backboard_high[3] = { 5.412E+02, 1.768E+00, -1.383E-03 };
+
+    const double *coeff;
+
+    switch (height) {
+    case 0:
+	coeff = (distance < 133.) ? swish_low : backboard_low;
+	break;
+    case 1:
+	coeff = backboard_mid;
+	break;
+    case 2:
+	coeff = backboard_high;
+	break;
+    default:
+	// invalid
+	return 0.;
+    }
+
+    return coeff[0] + distance * (coeff[1] + (distance * coeff[2]));
+}
+
 void Paint(HWND hWnd)
 {
     WaitForSingleObject(appSync, INFINITE);
@@ -215,27 +284,36 @@ void Paint(HWND hWnd)
 	HDC hdcMem = CreateCompatibleDC(hdc);
 	SelectObject(hdcMem, hbmp);
 	// FillRect(hdc, &rect, GetSysColorBrush(COLOR_BACKGROUND));
-	BitBlt(hdc, 0, 0, bmp.bmWidth, bmp.bmHeight, hdcMem, 0, 0, SRCCOPY);
+	BitBlt(hdc, IMAGE1_X, IMAGE1_Y, bmp.bmWidth, bmp.bmHeight, hdcMem, 0, 0, SRCCOPY);
 	DeleteDC(hdcMem);
 	delete bmpImage;
     } else {
 	FillRect(hdc, &rect, (HBRUSH)GetStockObject(WHITE_BRUSH));
     }
+    if (secondImage) {
+	BitmapImage* bmpImage = new BitmapImage(secondImage);
+	HBITMAP hbmp = bmpImage->GetBitmap();
+	BITMAP bmp;
+	GetObject(hbmp, sizeof(BITMAP), &bmp);
+	HDC hdcMem = CreateCompatibleDC(hdc);
+	SelectObject(hdcMem, hbmp);
+	BitBlt(hdc, IMAGE2_X, IMAGE2_Y, bmp.bmWidth, bmp.bmHeight, hdcMem, 0, 0, SRCCOPY);
+	DeleteDC(hdcMem);
+	delete bmpImage;
+    }
     EndPaint(hAppWnd, &ps);
 
+targetValid = true;
     if (targetValid) {
 	// TBD: use a dynamic String object here
+	// TBD: proportionally-spaced fonts mess up this formatting
 	_stprintf_s(targetStr,
-	    TEXT("center\n visible %d angle %6.1f distance %5.1f\n\n")
-	    TEXT("top\n visible %d angle %6.1f distance %5.1f\n\n")
-	    TEXT("bottom\n visible %d angle %6.1f distance %5.1f\n\n")
-	    TEXT("left\n visible %d angle %6.1f distance %5.1f\n\n")
-	    TEXT("right\n visible %d angle %6.1f distance %5.1f\n\n"),
-	    tlCenter.valid, tlCenter.angle, tlCenter.distance,
-	    tlTop.valid,    tlTop.angle,    tlTop.distance,
-	    tlBottom.valid, tlBottom.angle, tlBottom.distance,
-	    tlLeft.valid,   tlLeft.angle,   tlLeft.distance,
-	    tlRight.valid,  tlRight.angle,  tlRight.distance);
+	    TEXT("top   visible %d angle %6.1f distance %6.1f speed %5.0f\n")
+	    TEXT("left   visible %d angle %6.1f distance %6.1f speed %5.0f\n")
+	    TEXT("right visible %d angle %6.1f distance %6.1f speed %5.0f\n") ,
+	    tlTop.valid,    tlTop.angle,    tlTop.distance,   Ballistics(2, tlTop.distance),
+	    tlLeft.valid,   tlLeft.angle,   tlLeft.distance,  Ballistics(1, tlLeft.distance),
+	    tlRight.valid,  tlRight.angle,  tlRight.distance, Ballistics(1, tlRight.distance) );
     } else {
 	targetStr[0] = TEXT('\0');
     }
