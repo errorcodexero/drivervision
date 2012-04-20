@@ -13,45 +13,56 @@
 #define	CAMERA2_IP "10.14.25.12"
 #define	THRESHOLD 240
 
-#define	IMAGE1_X	660
+#define	IMAGE1_X	0
 #define	IMAGE1_WIDTH	640
 #define	IMAGE1_Y	0
 #define	IMAGE1_HEIGHT	480
 
-#define	IMAGE2_X	0
+#define	IMAGE2_X	640
 #define	IMAGE2_WIDTH	640
 #define	IMAGE2_Y	0
 #define	IMAGE2_HEIGHT	480
 
-#define	TEXT_X		660
+#define	TEXT_X		0
 #define	TEXT_WIDTH	640
-#define	TEXT_Y		490
+#define	TEXT_Y		0
 #define	TEXT_HEIGHT	60
 
-#define	WINDOW_WIDTH	1300
-#define	WINDOW_HEIGHT	610
+#define	WINDOW_WIDTH	1280
+#define	WINDOW_HEIGHT	480
 
 
 // Global Variables:
 HINSTANCE hInst;				// current instance
-HWND hAppWnd, hTxtWnd;
-TCHAR targetStr[400];
+HWND hAppWnd;
 TCHAR szTitle[MAX_LOADSTRING];			// The title bar text
 TCHAR szWindowClass[MAX_LOADSTRING];		// the main window class name
-AxisCamera *pCamera = NULL;
-AxisCamera *pCamera2 = NULL;
+
+HWND hCollectorWnd;
+AxisCamera *pCollectorCamera = NULL;
+Image *collectorImage = NULL;
+HANDLE collectorMutex = NULL;
+
+HWND hTargetWnd, hTxtWnd;
+AxisCamera *pTargetCamera = NULL;
 Target *pTarget = NULL;
-Image *processedImage = NULL;
-Image *secondImage = NULL;
-HANDLE appSync;
+Image *targetImage = NULL;
+HANDLE targetMutex = NULL;
+
 bool targetValid = false;
 Target::TargetLocation tlTop, tlLeft, tlRight, tlBottom, tlCenter;
 
 // Forward declarations of functions included in this code module:
 ATOM		    MyRegisterClass(HINSTANCE hInstance);
 BOOL		    InitInstance(HINSTANCE, LPTSTR, int);
-LRESULT CALLBACK    WndProc(HWND, UINT, WPARAM, LPARAM);
+DWORD WINAPI	    CollectorApp(LPVOID param);
+DWORD WINAPI	    TargetApp(LPVOID param);
+LRESULT CALLBACK    AppWndProc(HWND, UINT, WPARAM, LPARAM);
 INT_PTR CALLBACK    About(HWND, UINT, WPARAM, LPARAM);
+LRESULT CALLBACK    ImgWndProc(HWND, UINT, WPARAM, LPARAM);
+DWORD WINAPI        CollectorPaint();
+DWORD WINAPI        TargetPaint();
+DWORD WINAPI        TxtPaint();
 
 int APIENTRY _tWinMain(HINSTANCE hInstance,
                      HINSTANCE hPrevInstance,
@@ -59,7 +70,15 @@ int APIENTRY _tWinMain(HINSTANCE hInstance,
                      int       nCmdShow)
 {
     UNREFERENCED_PARAMETER(hPrevInstance);
-    UNREFERENCED_PARAMETER(lpCmdLine);
+
+#if DEBUG_CONSOLE
+    AllocConsole();
+    freopen("CONIN$", "rb", stdin);
+    freopen("CONOUT$", "wb", stdout);
+    setvbuf(stdout, NULL, _IONBF, 0);
+    freopen("CONOUT$", "wb", stderr);
+    setvbuf(stderr, NULL, _IONBF, 0);
+#endif
 
     // TODO: Place code here.
     MSG msg;
@@ -68,7 +87,10 @@ int APIENTRY _tWinMain(HINSTANCE hInstance,
     // Initialize global strings
     LoadString(hInstance, IDS_APP_TITLE, szTitle, MAX_LOADSTRING);
     LoadString(hInstance, IDC_DRIVERVISION, szWindowClass, MAX_LOADSTRING);
-    MyRegisterClass(hInstance);
+    if (!MyRegisterClass(hInstance))
+    {
+	return FALSE;
+    }
 
     // Perform application initialization:
     if (!InitInstance (hInstance, lpCmdLine, nCmdShow))
@@ -108,66 +130,47 @@ int APIENTRY _tWinMain(HINSTANCE hInstance,
 //
 ATOM MyRegisterClass(HINSTANCE hInstance)
 {
-    WNDCLASSEX wcex;
+    WNDCLASSEX wcexApp, wcexImg;
 
-    wcex.cbSize = sizeof(WNDCLASSEX);
+    wcexApp.cbSize = sizeof(WNDCLASSEX);
 
-    wcex.style		= CS_HREDRAW | CS_VREDRAW;
-    wcex.lpfnWndProc	= WndProc;
-    wcex.cbClsExtra	= 0;
-    wcex.cbWndExtra	= 0;
-    wcex.hInstance	= hInstance;
-    wcex.hIcon		= LoadIcon(hInstance, MAKEINTRESOURCE(IDI_DRIVERVISION));
-    wcex.hCursor	= LoadCursor(NULL, IDC_ARROW);
-    wcex.hbrBackground	= (HBRUSH)(COLOR_WINDOW+1);
-    wcex.lpszMenuName	= MAKEINTRESOURCE(IDC_DRIVERVISION);
-    wcex.lpszClassName	= szWindowClass;
-    wcex.hIconSm	= LoadIcon(wcex.hInstance, MAKEINTRESOURCE(IDI_SMALL));
+    wcexApp.style		= CS_HREDRAW | CS_VREDRAW;
+    wcexApp.lpfnWndProc		= AppWndProc;
+    wcexApp.cbClsExtra		= 0;
+    wcexApp.cbWndExtra		= 0;
+    wcexApp.hInstance		= hInstance;
+    wcexApp.hIcon		= LoadIcon(hInstance, MAKEINTRESOURCE(IDI_DRIVERVISION));
+    wcexApp.hCursor		= LoadCursor(NULL, IDC_ARROW);
+    wcexApp.hbrBackground	= (HBRUSH)(COLOR_WINDOW+1);
+    wcexApp.lpszMenuName	= MAKEINTRESOURCE(IDC_DRIVERVISION);
+    wcexApp.lpszClassName	= szWindowClass;
+    wcexApp.hIconSm		= LoadIcon(wcexApp.hInstance, MAKEINTRESOURCE(IDI_SMALL));
 
-    return RegisterClassEx(&wcex);
-}
-
-DWORD WINAPI RunApp(LPVOID param)
-{
-    HWND hWnd = (HWND) param;
-    HANDLE hMutex = OpenMutex(SYNCHRONIZE, FALSE, TEXT("DriverVision"));
-    Image *cameraImage = imaqCreateImage(IMAQ_IMAGE_RGB, 3);
-    for (;;) {
-	bool update = false;
-	if (pCamera) {
-	    if (pCamera->GetImage(cameraImage)) {
-		WaitForSingleObject(hMutex, INFINITE);
-		if (targetValid = pTarget->ProcessImage(cameraImage, THRESHOLD)) {
-		    // printf("ProcessImage returns true\n");
-		    tlCenter = pTarget->GetTargetLocation(Target::kCenter);
-		    tlTop    = pTarget->GetTargetLocation(Target::kTop);
-		    tlBottom = pTarget->GetTargetLocation(Target::kBottom);
-		    tlLeft   = pTarget->GetTargetLocation(Target::kLeft);
-		    tlRight  = pTarget->GetTargetLocation(Target::kRight);
-		}
-		ReleaseMutex(hMutex);
-		update = true;
-	    } else {
-		fprintf(stderr, "Camera 1 GetImage failed\n");
-	    }
-	}
-	if (pCamera2) {
-	    if (pCamera2->GetImage(cameraImage)) {
-		WaitForSingleObject(hMutex, INFINITE);
-		if (imaqDuplicate(secondImage, cameraImage) != 0) {
-		    update = true;
-		}
-		ReleaseMutex(hMutex);
-	    } else {
-		fprintf(stderr, "Camera 2 GetImage failed\n");
-	    }
-	}
-	if (update) {
-	    InvalidateRect(hWnd, NULL, false);
-	}
+    ATOM aApp = RegisterClassEx(&wcexApp);
+    if (!aApp) {
+	return NULL;
     }
 
-    return 0;
+    wcexImg.cbSize = sizeof(WNDCLASSEX);
+
+    wcexImg.style		= CS_HREDRAW | CS_VREDRAW;
+    wcexImg.lpfnWndProc		= ImgWndProc;
+    wcexImg.cbClsExtra		= 0;
+    wcexImg.cbWndExtra		= 0;
+    wcexImg.hInstance		= hInstance;
+    wcexImg.hIcon		= NULL;
+    wcexImg.hCursor		= LoadCursor(NULL, IDC_ARROW);
+    wcexImg.hbrBackground	= (HBRUSH)(COLOR_WINDOW+1);
+    wcexImg.lpszMenuName	= NULL;
+    wcexImg.lpszClassName	= TEXT("DriverVisionImage");
+    wcexImg.hIconSm		= NULL;
+
+    ATOM aImg = RegisterClassEx(&wcexImg);
+    if (!aImg) {
+	return NULL;
+    }
+
+    return aApp;
 }
 
 //
@@ -187,30 +190,55 @@ BOOL InitInstance(HINSTANCE hInstance, LPTSTR lpCmdLine, int nCmdShow)
     hAppWnd = CreateWindow(szWindowClass, szTitle, WS_OVERLAPPEDWINDOW,
 	CW_USEDEFAULT, CW_USEDEFAULT, WINDOW_WIDTH, WINDOW_HEIGHT,
 	NULL, NULL, hInst, NULL);
-
+    printf("hAppWnd = %p\n", hAppWnd);
     if (!hAppWnd)
     {
 	return FALSE;
     }
 
-    hTxtWnd = CreateWindow(TEXT("STATIC"), NULL, WS_CHILD | WS_VISIBLE,
-			    TEXT_X, TEXT_Y, TEXT_WIDTH, TEXT_HEIGHT,
+    hCollectorWnd = CreateWindow(TEXT("DriverVisionImage"), NULL, WS_CHILD | WS_VISIBLE,
+			    IMAGE1_X, IMAGE1_Y, IMAGE1_WIDTH, IMAGE1_HEIGHT,
 			    hAppWnd, NULL, hInst, NULL);
-
-    if (lpCmdLine && _tcslen(lpCmdLine) > 0) {
-//	pCamera = new AxisCamera(lpCmdLine);
-	pCamera2 = NULL;
-	secondImage = NULL;
-    } else {
-//	pCamera = new AxisCamera(TEXT(CAMERA_IP));
-	pCamera2 = new AxisCamera(TEXT(CAMERA2_IP));
-	secondImage = imaqCreateImage(IMAQ_IMAGE_RGB, 3);
+    printf("hCollectorWnd = %p\n", hCollectorWnd);
+    if (!hCollectorWnd)
+    {
+	return FALSE;
     }
-    pTarget = new Target();
-    processedImage = imaqCreateImage(IMAQ_IMAGE_RGB, 3);
-    appSync = CreateMutex(NULL, FALSE, TEXT("DriverVision"));
 
-    CreateThread(NULL, 0, RunApp, hAppWnd, 0, NULL);
+    hTargetWnd = CreateWindow(TEXT("DriverVisionImage"), NULL, WS_CHILD | WS_VISIBLE,
+			    IMAGE2_X, IMAGE2_Y, IMAGE2_WIDTH, IMAGE2_HEIGHT,
+			    hAppWnd, NULL, hInst, NULL);
+    printf("hTargetWnd = %p\n", hTargetWnd);
+    if (!hTargetWnd)
+    {
+	return FALSE;
+    }
+
+    LPTSTR ip1 = TEXT(CAMERA_IP);
+    LPTSTR ip2 = TEXT(CAMERA2_IP);
+    if (lpCmdLine && _tcslen(lpCmdLine) > 0) {
+	LPTSTR context = NULL;
+	ip1 = _tcstok_s(lpCmdLine, TEXT(" \t\r\n"), &context);
+	ip2 = _tcstok_s(NULL, TEXT(" \t\r\n"), &context);
+    }
+
+    if (ip1 && _tcslen(ip1) > 0) {
+	pTargetCamera = new AxisCamera(ip1);
+	printf("pTargetCamera = %p\n", pTargetCamera);
+	pTarget = new Target();
+	printf("pTarget = %p\n", pTarget);
+	targetImage = imaqCreateImage(IMAQ_IMAGE_RGB, 3);
+	targetMutex = CreateMutex(NULL, FALSE, NULL);
+	CreateThread(NULL, 0, TargetApp, NULL, 0, NULL);
+    }
+
+    if (ip2 && _tcslen(ip2) > 0) {
+	pCollectorCamera = new AxisCamera(ip2);
+	printf("pCollectorCamera = %p\n", pTargetCamera);
+	collectorImage = imaqCreateImage(IMAQ_IMAGE_RGB, 3);
+	collectorMutex = CreateMutex(NULL, FALSE, NULL);
+	CreateThread(NULL, 0, CollectorApp, NULL, 0, NULL);
+    }
 
     ShowWindow(hAppWnd, nCmdShow);
     UpdateWindow(hAppWnd);
@@ -218,24 +246,36 @@ BOOL InitInstance(HINSTANCE hInstance, LPTSTR lpCmdLine, int nCmdShow)
     return TRUE;
 }
 
-//
-//  FUNCTION: WndProc(HWND, UINT, WPARAM, LPARAM)
-//
-//  PURPOSE:  Processes messages for the main window.
-//
-//  WM_COMMAND	- process the application menu
-//  WM_PAINT	- Paint the main window
-//  WM_DESTROY	- post a quit message and return
-//
-//
-
-bool GetProcessedImage( Image *pImage )
+DWORD WINAPI CollectorApp(LPVOID param)
 {
-    if (pTarget) {
-	int result = pTarget->GetProcessedImage(pImage);
-	return (result != 0);
+    Image *cameraImage = imaqCreateImage(IMAQ_IMAGE_RGB, 3);
+    while (pCollectorCamera->GetImage(cameraImage)) {
+	WaitForSingleObject(collectorMutex, INFINITE);
+	(void) imaqDuplicate(collectorImage, cameraImage);
+	ReleaseMutex(collectorMutex);
+	InvalidateRect(hCollectorWnd, NULL, false);
     }
-    return false;
+    return 0;
+}
+
+DWORD WINAPI TargetApp(LPVOID param)
+{
+    Image *cameraImage = imaqCreateImage(IMAQ_IMAGE_RGB, 3);
+    while (pTargetCamera->GetImage(cameraImage)) {
+	WaitForSingleObject(targetMutex, INFINITE);
+	if (targetValid = pTarget->ProcessImage(cameraImage, THRESHOLD)) {
+	    // printf("ProcessImage returns true\n");
+	    tlCenter = pTarget->GetTargetLocation(Target::kCenter);
+	    tlTop    = pTarget->GetTargetLocation(Target::kTop);
+	    tlBottom = pTarget->GetTargetLocation(Target::kBottom);
+	    tlLeft   = pTarget->GetTargetLocation(Target::kLeft);
+	    tlRight  = pTarget->GetTargetLocation(Target::kRight);
+	}
+	(void) pTarget->GetProcessedImage(targetImage);
+	ReleaseMutex(targetMutex);
+	InvalidateRect(hTargetWnd, NULL, false);
+    }
+    return 0;
 }
 
 double Ballistics( int height, double distance )
@@ -267,62 +307,18 @@ double Ballistics( int height, double distance )
     return coeff[0] + distance * (coeff[1] + (distance * coeff[2]));
 }
 
-void Paint(HWND hWnd)
-{
-    WaitForSingleObject(appSync, INFINITE);
+//
+//  FUNCTION: AppWndProc(HWND, UINT, WPARAM, LPARAM)
+//
+//  PURPOSE:  Processes messages for the main window.
+//
+//  WM_COMMAND	- process the application menu
+//  WM_PAINT	- Paint the main window
+//  WM_DESTROY	- post a quit message and return
+//
+//
 
-    // note: repaint all windows rather than just the one indicated by hWnd
-    RECT rect;
-    PAINTSTRUCT ps;
-    GetClientRect(hAppWnd, &rect);
-    HDC hdc = BeginPaint(hAppWnd, &ps);
-    if (GetProcessedImage(processedImage)) {
-	BitmapImage* bmpImage = new BitmapImage(processedImage);
-	HBITMAP hbmp = bmpImage->GetBitmap();
-	BITMAP bmp;
-	GetObject(hbmp, sizeof(BITMAP), &bmp);
-	HDC hdcMem = CreateCompatibleDC(hdc);
-	SelectObject(hdcMem, hbmp);
-	// FillRect(hdc, &rect, GetSysColorBrush(COLOR_BACKGROUND));
-	BitBlt(hdc, IMAGE1_X, IMAGE1_Y, bmp.bmWidth, bmp.bmHeight, hdcMem, 0, 0, SRCCOPY);
-	DeleteDC(hdcMem);
-	delete bmpImage;
-    } else {
-	FillRect(hdc, &rect, (HBRUSH)GetStockObject(WHITE_BRUSH));
-    }
-    if (secondImage) {
-	BitmapImage* bmpImage = new BitmapImage(secondImage);
-	HBITMAP hbmp = bmpImage->GetBitmap();
-	BITMAP bmp;
-	GetObject(hbmp, sizeof(BITMAP), &bmp);
-	HDC hdcMem = CreateCompatibleDC(hdc);
-	SelectObject(hdcMem, hbmp);
-	BitBlt(hdc, IMAGE2_X, IMAGE2_Y, bmp.bmWidth, bmp.bmHeight, hdcMem, 0, 0, SRCCOPY);
-	DeleteDC(hdcMem);
-	delete bmpImage;
-    }
-    EndPaint(hAppWnd, &ps);
-
-targetValid = true;
-    if (targetValid) {
-	// TBD: use a dynamic String object here
-	// TBD: proportionally-spaced fonts mess up this formatting
-	_stprintf_s(targetStr,
-	    TEXT("top   visible %d angle %6.1f distance %6.1f speed %5.0f\n")
-	    TEXT("left   visible %d angle %6.1f distance %6.1f speed %5.0f\n")
-	    TEXT("right visible %d angle %6.1f distance %6.1f speed %5.0f\n") ,
-	    tlTop.valid,    tlTop.angle,    tlTop.distance,   Ballistics(2, tlTop.distance),
-	    tlLeft.valid,   tlLeft.angle,   tlLeft.distance,  Ballistics(1, tlLeft.distance),
-	    tlRight.valid,  tlRight.angle,  tlRight.distance, Ballistics(1, tlRight.distance) );
-    } else {
-	targetStr[0] = TEXT('\0');
-    }
-    SetWindowText(hTxtWnd, targetStr);
-
-    ReleaseMutex(appSync);
-}
-
-LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
+LRESULT CALLBACK AppWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
     int wmId, wmEvent;
 
@@ -343,9 +339,6 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 	default:
 	    return DefWindowProc(hWnd, message, wParam, lParam);
 	}
-	break;
-    case WM_PAINT:
-	Paint(hWnd);
 	break;
     case WM_DESTROY:
 	PostQuitMessage(0);
@@ -376,6 +369,85 @@ INT_PTR CALLBACK About(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
     return (INT_PTR)FALSE;
 }
 
+LRESULT CALLBACK ImgWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    if (message == WM_PAINT) {
+	if (hWnd == hCollectorWnd) {
+	    return CollectorPaint();
+	}
+	if (hWnd == hTargetWnd) {
+	    return TargetPaint();
+	}
+    }
+    return DefWindowProc(hWnd, message, wParam, lParam);
+}
+
+DWORD WINAPI CollectorPaint()
+{
+    WaitForSingleObject(collectorMutex, INFINITE);
+
+    BitmapImage* bmpImage = new BitmapImage(collectorImage);
+
+    HBITMAP hbmp = bmpImage->GetBitmap();
+    BITMAP bmp;
+    GetObject(hbmp, sizeof(BITMAP), &bmp);
+
+    PAINTSTRUCT ps;
+    HDC hdc = BeginPaint(hCollectorWnd, &ps);
+    HDC hdcMem = CreateCompatibleDC(hdc);
+    SelectObject(hdcMem, hbmp);
+    BitBlt(hdc, 0, 0, bmp.bmWidth, bmp.bmHeight, hdcMem, 0, 0, SRCCOPY);
+    DeleteDC(hdcMem);
+    EndPaint(hCollectorWnd, &ps);
+
+    delete bmpImage;
+
+    ReleaseMutex(collectorMutex);
+
+    return 0;
+}
+
+DWORD WINAPI TargetPaint()
+{
+    WaitForSingleObject(targetMutex, INFINITE);
+
+    PAINTSTRUCT ps;
+    HDC hdc = BeginPaint(hTargetWnd, &ps);
+
+    BitmapImage* bmpImage = new BitmapImage(targetImage);
+    HBITMAP hbmp = bmpImage->GetBitmap();
+    BITMAP bmp;
+    GetObject(hbmp, sizeof(BITMAP), &bmp);
+    HDC hdcMem = CreateCompatibleDC(hdc);
+    SelectObject(hdcMem, hbmp);
+    BitBlt(hdc, 0, 0, bmp.bmWidth, bmp.bmHeight, hdcMem, 0, 0, SRCCOPY);
+    DeleteDC(hdcMem);
+    delete bmpImage;
+
+    // TBD: use a dynamic String object here
+    // TBD: change to fixed-width font for alignment?
+    TCHAR targetStr[400];
+    if (targetValid) {
+	_stprintf_s(targetStr,
+	    TEXT("top   visible %d angle %6.1f distance %6.1f speed %5.0f\n")
+	    TEXT("left  visible %d angle %6.1f distance %6.1f speed %5.0f\n")
+	    TEXT("right visible %d angle %6.1f distance %6.1f speed %5.0f\n") ,
+	    tlTop.valid,    tlTop.angle,    tlTop.distance,   Ballistics(2, tlTop.distance),
+	    tlLeft.valid,   tlLeft.angle,   tlLeft.distance,  Ballistics(1, tlLeft.distance),
+	    tlRight.valid,  tlRight.angle,  tlRight.distance, Ballistics(1, tlRight.distance) );
+    } else {
+	_stprintf_s(targetStr, TEXT("no targets"));
+    }
+
+//    SetBkColor(hdc, RGB(0, 0, 0));
+//    SetTextColor(hdc, RGB(255, 255, 255));
+    TextOut(hdc, TEXT_X, TEXT_Y, targetStr, _tcslen(targetStr));
+
+    EndPaint(hTargetWnd, &ps);
+
+    ReleaseMutex(targetMutex);
+    return 0;
+}
 #define WPI_ERRORS_DEFINE_STRINGS
 #include "WPIErrors.h"
 

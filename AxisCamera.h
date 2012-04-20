@@ -23,10 +23,13 @@ public:
 
 private:
     static DWORD WINAPI StartCamera(LPVOID param);
+#if 0
     void ConfigureCamera();
+#endif
     void Run();
     int ReadBytes(int offset);
 
+    void Win32Error();
     void AllocError();
     void SocketError();
     void SocketEOF();
@@ -35,6 +38,7 @@ private:
 
     LPTSTR m_ipaddr;
     HANDLE m_thread;
+    HANDLE m_event;
     HANDLE m_mutex;
     SOCKET m_cameraSocket;
     char*  m_cameraBuffer;

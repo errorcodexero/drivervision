@@ -31,6 +31,12 @@
 #define	BUFFER_INCREMENT (50*1024)
 
 // fatal error handlers
+void AxisCamera::Win32Error()
+{
+    printf("AxisCamera: Win32 error %d\n", GetLastError());
+    ExitProcess(1);
+}
+
 void AxisCamera::AllocError()
 {
     printf("AxisCamera: memory allocation failed\n");
@@ -65,6 +71,8 @@ void AxisCamera::VisionError()
 // Constructor
 AxisCamera::AxisCamera( LPCTSTR ipaddr )
 {
+//  printf("AxisCamera constructor at %p\n", this);
+
     m_ipaddr = _tcsdup(ipaddr);
 
     // Create an NIVision Image object to represent the new frame.
@@ -78,13 +86,25 @@ AxisCamera::AxisCamera( LPCTSTR ipaddr )
 
     m_freshImage = false;
 
+    // Create an event object for synchronization with our caller.
+    m_event = CreateEvent(NULL, FALSE, FALSE, NULL);
+    if (m_event == NULL) {
+	Win32Error();
+    }
+
     // Create a mutex lock to control access to shared data.
     // TBD: check for error here
-    m_mutex = CreateMutex(NULL, FALSE, TEXT("AxisCameraMutex"));
+    m_mutex = CreateMutex(NULL, FALSE, NULL);
+    if (m_event == NULL) {
+	Win32Error();
+    }
 
     // Start the image processing thread.
     // TBD: check for error here, too
     m_thread = CreateThread(NULL, 0, AxisCamera::StartCamera, this, 0, NULL);
+    if (m_thread == NULL) {
+	Win32Error();
+    }
 }
 
 // Destructor
@@ -101,6 +121,7 @@ AxisCamera::~AxisCamera()
     free(m_cameraBuffer);
     imaqDispose(m_image);
     CloseHandle(m_mutex);
+    CloseHandle(m_event);
     free(m_ipaddr);
 }
 
@@ -165,6 +186,7 @@ void AxisCamera::ConfigureCamera()
 
 int AxisCamera::ReadBytes( int offset )
 {
+//  printf("AxisCamera::ReadBytes this %p m_bufferSize %d offset %d\n", this, m_bufferSize, offset);
     if (m_bufferSize < offset + BUFFER_INCREMENT) {
 	m_bufferSize += BUFFER_INCREMENT;
 	m_cameraBuffer = (char *) realloc((void *)m_cameraBuffer, m_bufferSize);
@@ -191,14 +213,16 @@ DWORD WINAPI AxisCamera::StartCamera(LPVOID param)
 
 void AxisCamera::Run()
 {
+//  printf("camera thread %p starting...\n", this);
+
     // Initialize Winsock library.
     WSADATA WsaDat;
     if (WSAStartup(MAKEWORD(2, 2), &WsaDat) != NO_ERROR) {
 	SocketError();
     }
 
-    // Configure the camera's default image stream.
 #if 0
+    // Configure the camera's default image stream.
     ConfigureCamera();
 #endif
 
@@ -213,23 +237,39 @@ void AxisCamera::Run()
 	SocketError();
     }
 
+//  printf("camera thread %p connected\n", this);
+
     // Populate the request string with user parameters defined in Constants.h
     char requestString[256];
     sprintf_s(requestString,
 	    sizeof requestString,
+#if 1
+	    // TrendNet IP-110
+	    "GET /cgi/mjpg/mjpeg.cgi"
+		" HTTP/1.1\r\n"
+		"User-Agent: DriverVision\r\n"
+		"Accept: */*\r\n"
+		"Connection: Keep-alive\r\n"
+		"DNT: 1\r\n"
+		"Authorization: Basic %s\r\n\r\n",
+	    CAMERA_AUTHENTICATION);
+#else
+	    // Axis M206, M1011
 	    "GET /axis-cgi/mjpg/video.cgi"
 		"?des_fps=%i&compression=%i&resolution=%ix%i&rotation=%i&color=1&colorlevel=%i"
 		" HTTP/1.1\r\n"
 		"User-Agent: DriverVision\r\n"
 		"Accept: */*\r\n"
-		"Connection: Close\r\n"
-		"Authorization: Basic %s;\r\n\r\n",
+		"Connection: Keep-alive\r\n"
+		"DNT: 1\r\n"
+		"Authorization: Basic %s\r\n\r\n",
 	    CAMERA_FRAMES_PER_SECOND,
 	    CAMERA_COMPRESSION,
 	    CAMERA_WIDTH, CAMERA_HEIGHT,
 	    CAMERA_ROTATION,
 	    CAMERA_COLOR_LEVEL,
 	    CAMERA_AUTHENTICATION);
+#endif
 
     // Send the request string to the camera, prompting a continuous motion JPEG stream in reply.
     if (send(m_cameraSocket, requestString, (int)strlen(requestString), 0) == SOCKET_ERROR) {
@@ -244,24 +284,29 @@ void AxisCamera::Run()
 	AllocError();
     }
 
+//  printf("camera thread %p reading...\n", this);
+
     // Read the stream of frames from the camera.
     int len = 0;
     for (;;)
     {
 	// Each frame starts with HTTP headers ending with CRLFCRLF.
-	// Read from the stream until all the headers (and perhaps some following data) are in memory.
+	// Read from the stream until all the headers (and perhaps some
+	// following data) are in memory.
 	int offset = 0;
 	int found = 0;
 
 	while (!found) {
+//	    printf("camera %p offset %d len %d\n", this, offset, len);
 	    while (len < offset + 4) {
 		int n = ReadBytes(len);
+//		printf("camera %p offset %d len %d read %d\n", this, offset, len, n);
 		if (n == 0) {
 		    SocketEOF();
 		}
 		len += n;
 	    }
-	    while (offset + 4 < len) {
+	    while (offset + 4 <= len) {
 		if (memcmp(m_cameraBuffer + offset, "\r\n\r\n", 4) == 0) {
 		    found = 1;
 		    break;
@@ -269,6 +314,8 @@ void AxisCamera::Run()
 		offset++;
 	    }
 	}
+
+//	printf("camera %p found boundary at offset %d\n", this, offset);
 
 	// replace the second CRLF with a NUL so we can use e.g. strstr safely.
 	m_cameraBuffer[offset+2] = '\0';
@@ -281,6 +328,8 @@ void AxisCamera::Run()
         if (contentPtr) {
 	    int contentLength = atol(contentPtr + 16);
 
+//	    printf("camera %p content-length %d\n", this, contentLength);
+
 	    // Continue reading until the entire image is in memory.
 	    while (len < offset + contentLength) {
 		int n = ReadBytes(len);
@@ -290,9 +339,17 @@ void AxisCamera::Run()
 		len += n;
 	    }
 
+//	    printf("camera %p wait for mutex\n", this);
+
 	    // Synchronize with the main thread before writing the image.
 	    WaitForSingleObject(m_mutex, INFINITE);
 	    {
+		// strip any non-JPEG header
+		while (contentLength > 0 && m_cameraBuffer[offset] != (char)0xFF) {
+		    offset++;
+		    contentLength--;
+		}
+
 		// Convert JPEG stream to bitmap.
 		Jpeg::Decoder *jpg = new Jpeg::Decoder(
 			(unsigned char *) m_cameraBuffer + offset,
@@ -304,26 +361,33 @@ void AxisCamera::Run()
 		// Check conversion results.
 		int result = jpg->GetResult();
 		if (result != 0) {
-		    printf("JPEG decode failed: %d\n", result);
-		    ExitProcess(1);
+		    printf("camera %p JPEG decode failed: %d\n", this, result);
+		} else {
+//		    printf("camera %p JPEG image: width %d height %d color %d size %u\n",
+//			    this, jpg->GetWidth(), jpg->GetHeight(), jpg->IsColor(), jpg->GetImageSize());
+
+		    // Convert to IMAQ Image
+		    if (imaqArrayToImage(m_image, jpg->GetImage(),
+		    	jpg->GetWidth(), jpg->GetHeight()))
+		    {
+			// Let the caller know a new image is available.
+			m_freshImage = true;
+			if (!SetEvent(m_event)) {
+			    Win32Error();
+			}
+		    }
+		    else
+		    {
+			printf("camera %p imaqArrayToImage failed: %s\n", this,
+				imaqGetErrorText(imaqGetLastError()));
+		    }
+		    delete jpg;
 		}
-
-		// printf("JPEG image: width %d height %d color %d size %u\n",
-		//    jpg->GetWidth(), jpg->GetHeight(), jpg->IsColor(), jpg->GetImageSize());
-
-		// Convert to IMAQ Image
-		if (!imaqArrayToImage(m_image, jpg->GetImage(), jpg->GetWidth(), jpg->GetHeight())) {
-		    printf("imaqArrayToImage failed\n");
-		    VisionError();
-		}
-
-		delete jpg;
-
-		// Let the caller know a new image is available.
-		m_freshImage = true;
 	    }
 	    // Release the image to the main task.
 	    ReleaseMutex(m_mutex);
+	} else {
+	    printf("camera %p no Content-length\n", this);
 	}
 	// Discard the current headers and image data.
 	// Move any remaining data to the beginning of the buffer for the next pass.
@@ -343,13 +407,28 @@ bool AxisCamera::IsFreshImage()
 
 int AxisCamera::GetImage( Image *img )
 {
-    while (!IsFreshImage()) {
-	Sleep(100);
+//  printf("camera %p GetImage waiting\n", this);
+
+    // Wait for the event signaling that a new frame is available.
+    if (WaitForSingleObject(m_event, INFINITE) != 0) {
+	Win32Error();
+	return 0;
     }
-    WaitForSingleObject(m_mutex, INFINITE);
+
+    // Take the mutex that protects shared data.
+    if (WaitForSingleObject(m_mutex, INFINITE) != 0) {
+	Win32Error();
+	return 0;
+    }
+
+    // Copy the image to the caller's buffer.
     int result = imaqDuplicate(img, m_image);
+
+    // Reset the "new image available" flag and return the new image.
     m_freshImage = false;
     ReleaseMutex(m_mutex);
+
+//  printf("camera %p return %d\n", this, result);
     return result;
 }
 
