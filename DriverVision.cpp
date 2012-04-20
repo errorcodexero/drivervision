@@ -9,7 +9,7 @@
 
 #define MAX_LOADSTRING 100
 
-#define CAMERA_IP "10.14.25.11"
+#define CAMERA1_IP "10.14.25.11"
 #define	CAMERA2_IP "10.14.25.12"
 #define	THRESHOLD 240
 
@@ -26,7 +26,7 @@
 #define	TEXT_X		0
 #define	TEXT_WIDTH	640
 #define	TEXT_Y		0
-#define	TEXT_HEIGHT	60
+#define	TEXT_HEIGHT	64
 
 #define	WINDOW_WIDTH	1280
 #define	WINDOW_HEIGHT	480
@@ -71,7 +71,7 @@ int APIENTRY _tWinMain(HINSTANCE hInstance,
 {
     UNREFERENCED_PARAMETER(hPrevInstance);
 
-#if DEBUG_CONSOLE
+#ifdef DEBUG_CONSOLE
     AllocConsole();
     freopen("CONIN$", "rb", stdin);
     freopen("CONOUT$", "wb", stdout);
@@ -79,10 +79,6 @@ int APIENTRY _tWinMain(HINSTANCE hInstance,
     freopen("CONOUT$", "wb", stderr);
     setvbuf(stderr, NULL, _IONBF, 0);
 #endif
-
-    // TODO: Place code here.
-    MSG msg;
-    HACCEL hAccelTable;
 
     // Initialize global strings
     LoadString(hInstance, IDS_APP_TITLE, szTitle, MAX_LOADSTRING);
@@ -98,9 +94,9 @@ int APIENTRY _tWinMain(HINSTANCE hInstance,
 	return FALSE;
     }
 
-    hAccelTable = LoadAccelerators(hInstance, MAKEINTRESOURCE(IDC_DRIVERVISION));
-
     // Main message loop:
+    MSG msg;
+    HACCEL hAccelTable = LoadAccelerators(hInstance, MAKEINTRESOURCE(IDC_DRIVERVISION));
     while (GetMessage(&msg, NULL, 0, 0))
     {
 	if (!TranslateAccelerator(msg.hwnd, hAccelTable, &msg))
@@ -214,16 +210,31 @@ BOOL InitInstance(HINSTANCE hInstance, LPTSTR lpCmdLine, int nCmdShow)
 	return FALSE;
     }
 
-    LPTSTR ip1 = TEXT(CAMERA_IP);
+    // Initialize Winsock library.
+    WSADATA WsaDat;
+    if (WSAStartup(MAKEWORD(2, 2), &WsaDat) != NO_ERROR) {
+	int error = WSAGetLastError();
+	printf("AxisCamera: winsock error %d\n", error);
+	ExitProcess(1);
+    }
+
+    LPTSTR ip1 = TEXT(CAMERA1_IP);
+    LPTSTR ct1 = TEXT("a");
     LPTSTR ip2 = TEXT(CAMERA2_IP);
+    LPTSTR ct2 = TEXT("a");
     if (lpCmdLine && _tcslen(lpCmdLine) > 0) {
 	LPTSTR context = NULL;
-	ip1 = _tcstok_s(lpCmdLine, TEXT(" \t\r\n"), &context);
-	ip2 = _tcstok_s(NULL, TEXT(" \t\r\n"), &context);
+	LPCTSTR whitespace = TEXT(" \t\r\n");
+	ip1 = _tcstok_s(lpCmdLine, whitespace, &context);
+	ct1 = _tcstok_s(NULL, whitespace, &context);
+	ip2 = _tcstok_s(NULL, whitespace, &context);
+	ct2 = _tcstok_s(NULL, whitespace, &context);
     }
 
     if (ip1 && _tcslen(ip1) > 0) {
-	pTargetCamera = new AxisCamera(ip1);
+	AxisCamera::CameraType t =
+	    (ct1 && ct1[0] == 't') ? AxisCamera::kTrendNet : AxisCamera::kAxis;
+	pTargetCamera = new AxisCamera(ip1, t);
 	printf("pTargetCamera = %p\n", pTargetCamera);
 	pTarget = new Target();
 	printf("pTarget = %p\n", pTarget);
@@ -233,7 +244,9 @@ BOOL InitInstance(HINSTANCE hInstance, LPTSTR lpCmdLine, int nCmdShow)
     }
 
     if (ip2 && _tcslen(ip2) > 0) {
-	pCollectorCamera = new AxisCamera(ip2);
+	AxisCamera::CameraType t =
+	    (ct2 && ct2[0] == 't') ? AxisCamera::kTrendNet : AxisCamera::kAxis;
+	pCollectorCamera = new AxisCamera(ip2, t);
 	printf("pCollectorCamera = %p\n", pTargetCamera);
 	collectorImage = imaqCreateImage(IMAQ_IMAGE_RGB, 3);
 	collectorMutex = CreateMutex(NULL, FALSE, NULL);
@@ -249,11 +262,14 @@ BOOL InitInstance(HINSTANCE hInstance, LPTSTR lpCmdLine, int nCmdShow)
 DWORD WINAPI CollectorApp(LPVOID param)
 {
     Image *cameraImage = imaqCreateImage(IMAQ_IMAGE_RGB, 3);
-    while (pCollectorCamera->GetImage(cameraImage)) {
-	WaitForSingleObject(collectorMutex, INFINITE);
-	(void) imaqDuplicate(collectorImage, cameraImage);
-	ReleaseMutex(collectorMutex);
-	InvalidateRect(hCollectorWnd, NULL, false);
+    while (1) {
+	pCollectorCamera->StartCamera();
+	while (pCollectorCamera->GetImage(cameraImage)) {
+	    WaitForSingleObject(collectorMutex, INFINITE);
+	    (void) imaqDuplicate(collectorImage, cameraImage);
+	    ReleaseMutex(collectorMutex);
+	    InvalidateRect(hCollectorWnd, NULL, false);
+	}
     }
     return 0;
 }
@@ -261,19 +277,22 @@ DWORD WINAPI CollectorApp(LPVOID param)
 DWORD WINAPI TargetApp(LPVOID param)
 {
     Image *cameraImage = imaqCreateImage(IMAQ_IMAGE_RGB, 3);
-    while (pTargetCamera->GetImage(cameraImage)) {
-	WaitForSingleObject(targetMutex, INFINITE);
-	if (targetValid = pTarget->ProcessImage(cameraImage, THRESHOLD)) {
-	    // printf("ProcessImage returns true\n");
-	    tlCenter = pTarget->GetTargetLocation(Target::kCenter);
-	    tlTop    = pTarget->GetTargetLocation(Target::kTop);
-	    tlBottom = pTarget->GetTargetLocation(Target::kBottom);
-	    tlLeft   = pTarget->GetTargetLocation(Target::kLeft);
-	    tlRight  = pTarget->GetTargetLocation(Target::kRight);
+    while (1) {
+	pTargetCamera->StartCamera();
+	while (pTargetCamera->GetImage(cameraImage)) {
+	    WaitForSingleObject(targetMutex, INFINITE);
+	    if (targetValid = pTarget->ProcessImage(cameraImage, THRESHOLD)) {
+		// printf("ProcessImage returns true\n");
+		tlCenter = pTarget->GetTargetLocation(Target::kCenter);
+		tlTop    = pTarget->GetTargetLocation(Target::kTop);
+		tlBottom = pTarget->GetTargetLocation(Target::kBottom);
+		tlLeft   = pTarget->GetTargetLocation(Target::kLeft);
+		tlRight  = pTarget->GetTargetLocation(Target::kRight);
+	    }
+	    (void) pTarget->GetProcessedImage(targetImage);
+	    ReleaseMutex(targetMutex);
+	    InvalidateRect(hTargetWnd, NULL, false);
 	}
-	(void) pTarget->GetProcessedImage(targetImage);
-	ReleaseMutex(targetMutex);
-	InvalidateRect(hTargetWnd, NULL, false);
     }
     return 0;
 }
@@ -429,19 +448,32 @@ DWORD WINAPI TargetPaint()
     TCHAR targetStr[400];
     if (targetValid) {
 	_stprintf_s(targetStr,
-	    TEXT("top   visible %d angle %6.1f distance %6.1f speed %5.0f\n")
-	    TEXT("left  visible %d angle %6.1f distance %6.1f speed %5.0f\n")
-	    TEXT("right visible %d angle %6.1f distance %6.1f speed %5.0f\n") ,
-	    tlTop.valid,    tlTop.angle,    tlTop.distance,   Ballistics(2, tlTop.distance),
-	    tlLeft.valid,   tlLeft.angle,   tlLeft.distance,  Ballistics(1, tlLeft.distance),
-	    tlRight.valid,  tlRight.angle,  tlRight.distance, Ballistics(1, tlRight.distance) );
+	    TEXT("top\t%s\t%6.1f\260\t%6.1f\"\tset %5.0f\n")
+	    TEXT("left\t%s\t%6.1f\260\t%6.1f\"\tset %5.0f\n")
+	    TEXT("right\t%s\t%6.1f\260\t%6.1f\"\tset %5.0f\n") ,
+	    tlTop.valid ? TEXT("OK") : TEXT("clip"),
+	      tlTop.angle,
+	      tlTop.distance,
+	      Ballistics(2, tlTop.distance),
+	    tlLeft.valid ? TEXT("OK") : TEXT("clip"),
+	      tlLeft.angle,
+	      tlLeft.distance,
+	      Ballistics(1, tlLeft.distance),
+	    tlRight.valid ? TEXT("OK") : TEXT("clip"),
+	      tlRight.angle,
+	      tlRight.distance,
+	      Ballistics(1, tlRight.distance));
     } else {
 	_stprintf_s(targetStr, TEXT("no targets"));
     }
 
-//    SetBkColor(hdc, RGB(0, 0, 0));
-//    SetTextColor(hdc, RGB(255, 255, 255));
-    TextOut(hdc, TEXT_X, TEXT_Y, targetStr, _tcslen(targetStr));
+    RECT rect;
+    rect.left   = TEXT_X;
+    rect.top    = TEXT_Y;
+    rect.right  = TEXT_X + TEXT_WIDTH;
+    rect.bottom = TEXT_Y + TEXT_HEIGHT;
+
+    DrawText(hdc, targetStr, -1, &rect, DT_TOP | DT_LEFT | DT_EXPANDTABS | DT_TABSTOP | (7 << 8));
 
     EndPaint(hTargetWnd, &ps);
 

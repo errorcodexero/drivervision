@@ -15,17 +15,21 @@
 
 class AxisCamera {
 public:
-    AxisCamera( LPCTSTR ipaddr = TEXT("10.14.25.11") );
+    typedef enum { kAxis, kTrendNet } CameraType;
+
+    AxisCamera( LPCTSTR ipaddr = TEXT("10.14.25.11"), CameraType type = kAxis );
     ~AxisCamera();
+
+    void SetAddress(LPCTSTR ipaddr);
+    void SetCameraType(CameraType);
+    bool StartCamera();
+    void StopCamera();
 
     bool IsFreshImage();
     int GetImage( Image* img );
 
 private:
     static DWORD WINAPI StartCamera(LPVOID param);
-#if 0
-    void ConfigureCamera();
-#endif
     void Run();
     int ReadBytes(int offset);
 
@@ -37,6 +41,7 @@ private:
     void VisionError();
 
     LPTSTR m_ipaddr;
+    CameraType m_cameraType;
     HANDLE m_thread;
     HANDLE m_event;
     HANDLE m_mutex;

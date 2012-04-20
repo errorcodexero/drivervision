@@ -1,5 +1,6 @@
 /*
  * Win32 interface to the Axis camera
+ * (and other MJPEG cameras)
  */
 
 #include "stdafx.h"
@@ -69,11 +70,10 @@ void AxisCamera::VisionError()
 }
 
 // Constructor
-AxisCamera::AxisCamera( LPCTSTR ipaddr )
+AxisCamera::AxisCamera( LPCTSTR ipaddr, CameraType cameraType )
 {
-//  printf("AxisCamera constructor at %p\n", this);
-
     m_ipaddr = _tcsdup(ipaddr);
+    m_cameraType = cameraType;
 
     // Create an NIVision Image object to represent the new frame.
     m_image = imaqCreateImage(IMAQ_IMAGE_RGB, 3);
@@ -83,8 +83,6 @@ AxisCamera::AxisCamera( LPCTSTR ipaddr )
     if (!imaqSetImageSize(m_image, CAMERA_WIDTH, CAMERA_HEIGHT)) {
 	VisionError();
     }
-
-    m_freshImage = false;
 
     // Create an event object for synchronization with our caller.
     m_event = CreateEvent(NULL, FALSE, FALSE, NULL);
@@ -99,90 +97,67 @@ AxisCamera::AxisCamera( LPCTSTR ipaddr )
 	Win32Error();
     }
 
-    // Start the image processing thread.
-    // TBD: check for error here, too
-    m_thread = CreateThread(NULL, 0, AxisCamera::StartCamera, this, 0, NULL);
-    if (m_thread == NULL) {
-	Win32Error();
+    // Initialize with the camera stopped.
+    m_thread = NULL;
+    m_freshImage = false;
+}
+
+void AxisCamera::SetAddress( LPCTSTR ipaddr )
+{
+    free(m_ipaddr);
+    m_ipaddr = _tcsdup(ipaddr);
+}
+
+void AxisCamera::SetCameraType( CameraType cameraType )
+{
+    m_cameraType = cameraType;
+}
+
+bool AxisCamera::StartCamera()
+{
+    // (Re)start the image processing thread.
+    if (m_thread != NULL) {
+	(void) AxisCamera::StopCamera();
     }
+    m_freshImage = false;
+    m_thread = CreateThread(NULL, 0, AxisCamera::StartCamera, this, 0, NULL);
+    return (m_thread != NULL);
+}
+
+void AxisCamera::StopCamera()
+{
+    // Avoid terminating the thread while it's writing shared objects.
+    if (m_mutex) {
+	WaitForSingleObject(m_mutex, INFINITE);
+    }
+    // Kill the thread.
+    if (m_thread) {
+	TerminateThread(m_thread, 0);
+	CloseHandle(m_thread);
+	m_thread = NULL;
+    }
+    // Release resources.
+    if (m_cameraSocket) {
+	closesocket(m_cameraSocket);
+	m_cameraSocket = NULL;
+    }
+    if (m_cameraBuffer) {
+	free(m_cameraBuffer);
+	m_cameraBuffer = NULL;
+    }
+    ReleaseMutex(m_mutex);
 }
 
 // Destructor
 AxisCamera::~AxisCamera()
 {
-    // Avoid terminating the thread while it's writing shared objects.
-    WaitForSingleObject(m_mutex, INFINITE);
-    // Kill the thread.
-    TerminateThread(m_thread, 0);
-    CloseHandle(m_thread);
-    // Release resources.
-    closesocket(m_cameraSocket);
-    WSACleanup();
-    free(m_cameraBuffer);
+    StopCamera();
+
     imaqDispose(m_image);
     CloseHandle(m_mutex);
     CloseHandle(m_event);
     free(m_ipaddr);
 }
-
-#if 0
-void AxisCamera::ConfigureCamera()
-{
-    // Create a TCP socket to the camera and connect to it.
-    SOCKET s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (s == INVALID_SOCKET) {
-	SocketError();
-    }
-
-    SOCKADDR_IN sockAddr;
-    int sockLen = sizeof sockAddr;
-    WSAStringToAddress(m_ipaddr, AF_INET, NULL, (LPSOCKADDR) &sockAddr, &sockLen);
-    sockAddr.sin_port = htons(CAMERA_PORT);
-
-    if (connect(s, (SOCKADDR*)&sockAddr, sizeof(sockAddr)) == SOCKET_ERROR) {
-	SocketError();
-    }
-
-    // Populate the settings string with user parameters defined in Constants.h
-    char settingsString[512];
-    sprintf_s(settingsString,
-	    sizeof settingsString,
-	    "GET /axis-cgi/admin/param.cgi?action=update"
-		"&ImageSource.I0.Sensor.WhiteBalance=%s"
-		"&ImageSource.I0.Sensor.Exposure=%s"
-		"&ImageSource.I0.Sensor.ExposurePriority=%d"
-		"&ImageSource.I0.Sensor.Brightness=%d"
-		"&ImageSource.I0.Sensor.ColorLevel=%d"
-		" HTTP/1.1\r\n"
-		"User-Agent: DriverVision\r\n"
-		"Accept: */*\r\n"
-		"Connection: Close\r\n",
-		"Authorization: Basic %s;\r\n\r\n",
-	    CAMERA_WHITE_BALANCE,
-	    CAMERA_EXPOSURE,
-	    CAMERA_EXPOSURE_PRIORITY,
-	    CAMERA_BRIGHTNESS,
-	    CAMERA_COLOR_LEVEL,
-	    CAMERA_AUTHENTICATION);
-
-    // Send the settings string to the camera to ensure desired video settings are selected.
-    if (send(s, settingsString, (int)strlen(settingsString), 0) == SOCKET_ERROR) {
-	SocketError();
-    }
-
-    // Discard the response from the camera.
-    char replyBuffer[512];
-    int status;
-    while ((status = recv(s, replyBuffer, 512, 0)) != 0) {
-	if (status == SOCKET_ERROR) {
-	    SocketError();
-	}
-    }
-
-    // Reset the socket for another operation since the camera closed it on the other end.
-    closesocket(s);
-}
-#endif
 
 int AxisCamera::ReadBytes( int offset )
 {
@@ -213,19 +188,6 @@ DWORD WINAPI AxisCamera::StartCamera(LPVOID param)
 
 void AxisCamera::Run()
 {
-//  printf("camera thread %p starting...\n", this);
-
-    // Initialize Winsock library.
-    WSADATA WsaDat;
-    if (WSAStartup(MAKEWORD(2, 2), &WsaDat) != NO_ERROR) {
-	SocketError();
-    }
-
-#if 0
-    // Configure the camera's default image stream.
-    ConfigureCamera();
-#endif
-
     // Open a connection to the camera.
     SOCKADDR_IN sockAddr;
     int sockLen = sizeof sockAddr;
@@ -240,36 +202,39 @@ void AxisCamera::Run()
 //  printf("camera thread %p connected\n", this);
 
     // Populate the request string with user parameters defined in Constants.h
-    char requestString[256];
-    sprintf_s(requestString,
-	    sizeof requestString,
-#if 1
-	    // TrendNet IP-110
-	    "GET /cgi/mjpg/mjpeg.cgi"
-		" HTTP/1.1\r\n"
-		"User-Agent: DriverVision\r\n"
-		"Accept: */*\r\n"
-		"Connection: Keep-alive\r\n"
-		"DNT: 1\r\n"
-		"Authorization: Basic %s\r\n\r\n",
-	    CAMERA_AUTHENTICATION);
-#else
-	    // Axis M206, M1011
-	    "GET /axis-cgi/mjpg/video.cgi"
-		"?des_fps=%i&compression=%i&resolution=%ix%i&rotation=%i&color=1&colorlevel=%i"
-		" HTTP/1.1\r\n"
-		"User-Agent: DriverVision\r\n"
-		"Accept: */*\r\n"
-		"Connection: Keep-alive\r\n"
-		"DNT: 1\r\n"
-		"Authorization: Basic %s\r\n\r\n",
-	    CAMERA_FRAMES_PER_SECOND,
-	    CAMERA_COMPRESSION,
-	    CAMERA_WIDTH, CAMERA_HEIGHT,
-	    CAMERA_ROTATION,
-	    CAMERA_COLOR_LEVEL,
-	    CAMERA_AUTHENTICATION);
-#endif
+#define Q(x) STRINGIFY(x)
+#define	STRINGIFY(x) #x
+    const char * requestString = NULL;
+
+    switch (m_cameraType) {
+    case kAxis: // Axis M206, M1011
+	requestString = "GET /axis-cgi/mjpg/video.cgi"
+			"?des_fps=" Q(CAMERA_FRAMES_PER_SECOND)
+			"&compression=" Q(CAMERA_COMPRESSION)
+			"&resolution=" Q(CAMERA_WIDTH) "x" Q(CAMERA_HEIGHT)
+			"&rotation=" Q(CAMERA_ROTATION)
+			"&color=1"
+			"&colorlevel=" Q(CAMERA_COLOR_LEVEL)
+			" HTTP/1.1\r\n"
+			"User-Agent: DriverVision\r\n"
+			"Accept: */*\r\n"
+			"Connection: Keep-alive\r\n"
+			"DNT: 1\r\n"
+			"Authorization: Basic" CAMERA_AUTHENTICATION "\r\n\r\n";
+	break;
+    case kTrendNet: // TrendNet IP-110
+	requestString = "GET /cgi/mjpg/mjpeg.cgi"
+			" HTTP/1.1\r\n"
+			"User-Agent: DriverVision\r\n"
+			"Accept: */*\r\n"
+			"Connection: Keep-alive\r\n"
+			"DNT: 1\r\n"
+			"Authorization: Basic " CAMERA_AUTHENTICATION "\r\n\r\n";
+	break;
+    default:
+	requestString = "GET / HTTP/1.1\r\n\r\n";
+	break;
+    }
 
     // Send the request string to the camera, prompting a continuous motion JPEG stream in reply.
     if (send(m_cameraSocket, requestString, (int)strlen(requestString), 0) == SOCKET_ERROR) {
