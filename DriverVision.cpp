@@ -13,14 +13,14 @@
 #define	CAMERA2_IP "10.14.25.12"
 #define	THRESHOLD 240
 
-#define	IMAGE1_X	0
+#define	IMAGE1_X	2
 #define	IMAGE1_WIDTH	640
-#define	IMAGE1_Y	0
+#define	IMAGE1_Y	2
 #define	IMAGE1_HEIGHT	480
 
-#define	IMAGE2_X	640
+#define	IMAGE2_X	644
 #define	IMAGE2_WIDTH	640
-#define	IMAGE2_Y	0
+#define	IMAGE2_Y	2
 #define	IMAGE2_HEIGHT	480
 
 #define	TEXT_X		0
@@ -28,8 +28,8 @@
 #define	TEXT_Y		0
 #define	TEXT_HEIGHT	64
 
-#define	WINDOW_WIDTH	1280
-#define	WINDOW_HEIGHT	480
+#define	WINDOW_WIDTH	1302
+#define	WINDOW_HEIGHT	542
 
 
 // Global Variables:
