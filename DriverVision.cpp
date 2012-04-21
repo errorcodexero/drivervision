@@ -310,7 +310,8 @@ double Ballistics( int height, double distance )
     const double backboard_low[3] = { 3.773E+02, 1.867E+00, 0.000E+00 };
 //  const double swish_mid[3] = { 1.296E+02, 4.956E+00, -8.586E-03 };
     const double backboard_mid[3] = { 2.755E+02, 3.556E+00, -3.864E-03 };
-    const double backboard_high[3] = { 5.412E+02, 1.768E+00, -1.383E-03 };
+//  const double backboard_high[3] = { 5.412E+02, 1.768E+00, -1.383E-03 };
+    const double backboard_high[3] = { 6.5008E+02, -4.7190E-02, 5.489E-03 };
 
     const double *coeff;
 
