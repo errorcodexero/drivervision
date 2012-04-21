@@ -19,14 +19,13 @@
 // Camera exposure priority (0 - prioritize quality, 50 - none, 100 - prioritize framerate).
 #define CAMERA_EXPOSURE_PRIORITY 0
 
-#define CAMERA_BRIGHTNESS 50
-#define CAMERA_COLOR_LEVEL 50
-
 #define CAMERA_FRAMES_PER_SECOND 6
 #define CAMERA_COMPRESSION 60
 #define CAMERA_WIDTH 640
 #define CAMERA_HEIGHT 480
 #define CAMERA_ROTATION 0
+#define CAMERA_BRIGHTNESS 50
+#define CAMERA_COLOR_LEVEL 50
 #define CAMERA_AUTHENTICATION "RlJDOkZSQw==" // Username 'FRC', password 'FRC'.
 
 #define	BUFFER_INCREMENT (50*1024)
@@ -220,7 +219,7 @@ void AxisCamera::Run()
 			"Accept: */*\r\n"
 			"Connection: Keep-alive\r\n"
 			"DNT: 1\r\n"
-			"Authorization: Basic" CAMERA_AUTHENTICATION "\r\n\r\n";
+			"Authorization: Basic " CAMERA_AUTHENTICATION "\r\n\r\n";
 	break;
     case kTrendNet: // TrendNet IP-110
 	requestString = "GET /cgi/mjpg/mjpeg.cgi"

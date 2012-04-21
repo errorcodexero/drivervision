@@ -71,7 +71,7 @@ int APIENTRY _tWinMain(HINSTANCE hInstance,
 {
     UNREFERENCED_PARAMETER(hPrevInstance);
 
-#ifdef DEBUG_CONSOLE
+#ifdef _DEBUG
     AllocConsole();
     freopen("CONIN$", "rb", stdin);
     freopen("CONOUT$", "wb", stdout);
@@ -240,16 +240,22 @@ BOOL InitInstance(HINSTANCE hInstance, LPTSTR lpCmdLine, int nCmdShow)
 	printf("pTarget = %p\n", pTarget);
 	targetImage = imaqCreateImage(IMAQ_IMAGE_RGB, 3);
 	targetMutex = CreateMutex(NULL, FALSE, NULL);
-	CreateThread(NULL, 0, TargetApp, NULL, 0, NULL);
     }
 
     if (ip2 && _tcslen(ip2) > 0) {
 	AxisCamera::CameraType t =
 	    (ct2 && ct2[0] == 't') ? AxisCamera::kTrendNet : AxisCamera::kAxis;
 	pCollectorCamera = new AxisCamera(ip2, t);
-	printf("pCollectorCamera = %p\n", pTargetCamera);
+	printf("pCollectorCamera = %p\n", pCollectorCamera);
 	collectorImage = imaqCreateImage(IMAQ_IMAGE_RGB, 3);
 	collectorMutex = CreateMutex(NULL, FALSE, NULL);
+    }
+
+    if (pTargetCamera) {
+	CreateThread(NULL, 0, TargetApp, NULL, 0, NULL);
+    }
+
+    if (pCollectorCamera) {
 	CreateThread(NULL, 0, CollectorApp, NULL, 0, NULL);
     }
 
